@@ -6,13 +6,13 @@ import { WorldShell } from "@/components/village/WorldShell";
 export const Route = createFileRoute("/activity-zone")({
   head: () => ({
     meta: [
-      { title: "ActivityZone — Your Mental Health Village" },
+      { title: "ActivityZone — Ananda" },
       {
         name: "description",
         content:
           "A playful island with a library, journaling prompts, doodle challenges, yoga stretches and mindfulness exercises.",
       },
-      { property: "og:title", content: "ActivityZone — Your Mental Health Village" },
+      { property: "og:title", content: "ActivityZone — Ananda" },
       {
         property: "og:description",
         content: "Library, journaling, doodles, yoga and mindfulness — pick what your mind needs.",

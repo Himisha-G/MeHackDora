@@ -5,12 +5,12 @@ import { ChatRoom } from "@/components/village/ChatRoom";
 export const Route = createFileRoute("/friendbot")({
   head: () => ({
     meta: [
-      { title: "FriendBot — Your Mental Health Village" },
+      { title: "FriendBot — Ananda" },
       {
         name: "description",
         content: "FriendBot is a warm companion who listens without judgement. Vent, ramble or just say hello.",
       },
-      { property: "og:title", content: "FriendBot — Your Mental Health Village" },
+      { property: "og:title", content: "FriendBot — Ananda" },
       { property: "og:description", content: "A warm companion who listens without judgement." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

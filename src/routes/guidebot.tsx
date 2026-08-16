@@ -5,12 +5,12 @@ import { ChatRoom } from "@/components/village/ChatRoom";
 export const Route = createFileRoute("/guidebot")({
   head: () => ({
     meta: [
-      { title: "GuideBot — Your Mental Health Village" },
+      { title: "GuideBot — Ananda" },
       {
         name: "description",
         content: "Talk to GuideBot for grounding steps, coping ideas and gentle guidance whenever you need it.",
       },
-      { property: "og:title", content: "GuideBot — Your Mental Health Village" },
+      { property: "og:title", content: "GuideBot — Ananda" },
       { property: "og:description", content: "Grounding steps and gentle guidance, one message at a time." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

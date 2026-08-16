@@ -5,12 +5,12 @@ import { ChatRoom } from "@/components/village/ChatRoom";
 export const Route = createFileRoute("/connect")({
   head: () => ({
     meta: [
-      { title: "Connect — Your Mental Health Village" },
+      { title: "Connect — Ananda" },
       {
         name: "description",
         content: "The lantern-lit pagoda where villagers gather to talk, share small wins and cheer each other on.",
       },
-      { property: "og:title", content: "Connect — Your Mental Health Village" },
+      { property: "og:title", content: "Connect — Ananda" },
       { property: "og:description", content: "Gather in the pagoda and share your day with the village." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

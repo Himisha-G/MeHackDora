@@ -77,12 +77,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Your Mental Health Village" },
+      { title: "Mental Wellness Village" },
       {
         name: "description",
         content: "A gentle village of islands for your mind: GuideBot, FriendBot, ActivityZone and Connect.",
       },
-      { property: "og:title", content: "Your Mental Health Village" },
+      { property: "og:title", content: "Mental Wellness Village" },
       {
         property: "og:description",
         content: "A gentle village of islands for your mind: GuideBot, FriendBot, ActivityZone and Connect.",

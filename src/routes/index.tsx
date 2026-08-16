@@ -10,13 +10,13 @@ import { FeatureSections } from "@/components/village/FeatureSections";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Your Mental Health Village — A calm world for your mind" },
+      { title: "Ananda — A calm world for your mind" },
       {
         name: "description",
         content:
           "Explore a gentle village of four islands: GuideBot, FriendBot, ActivityZone and Connect — chat, journal, stretch and share.",
       },
-      { property: "og:title", content: "Your Mental Health Village" },
+      { property: "og:title", content: "Ananda" },
       {
         property: "og:description",
         content: "Four islands for calmer days: GuideBot, FriendBot, ActivityZone and Connect.",
@@ -127,7 +127,7 @@ function VillageHome() {
             <Sparkle className="size-3.5" /> A gentle place to land
           </span>
           <h1 className="village-shimmer font-display text-4xl font-extrabold tracking-tight text-village-cream drop-shadow-[0_3px_14px_oklch(0.2_0.05_265/0.85)] sm:text-6xl lg:text-7xl">
-            Your Mental Health Village
+            Ananda
           </h1>
           <p className="mt-3 max-w-xl text-sm text-village-cream/90 drop-shadow sm:text-base">
             Wander the islands. Tap a home to open its world.

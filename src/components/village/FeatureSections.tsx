@@ -17,7 +17,7 @@ const FEATURES: Feature[] = [
   {
     to: "/guidebot",
     label: "GuideBot",
-    tagline: "The lantern cottage",
+    tagline: "THE LANTERN COTTAGE",
     blurb:
       "A steady companion for the heavier days. Ask anything, get grounding steps, gentle reframes and calming guidance whenever you need it.",
     icon: Bot,

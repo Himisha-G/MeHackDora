@@ -1,13 +1,14 @@
 import { Link } from "@tanstack/react-router";
 import type { LucideIcon } from "lucide-react";
 
-export type HotspotTone = "gold" | "mint" | "lilac" | "rose";
+export type HotspotTone = "gold" | "mint" | "lilac" | "rose" | "amber";
 
 const toneRing: Record<HotspotTone, string> = {
   gold: "bg-village-gold/45",
   mint: "bg-village-mint/45",
   lilac: "bg-village-lilac/45",
   rose: "bg-village-rose/45",
+  amber: "bg-amber-500/40",
 };
 
 const toneChip: Record<HotspotTone, string> = {
@@ -15,6 +16,7 @@ const toneChip: Record<HotspotTone, string> = {
   mint: "bg-village-mint/95 text-village-ink",
   lilac: "bg-village-lilac/95 text-village-ink",
   rose: "bg-village-rose/95 text-village-ink",
+  amber: "bg-amber-500 text-village-ink",
 };
 
 const toneText: Record<HotspotTone, string> = {
@@ -22,6 +24,7 @@ const toneText: Record<HotspotTone, string> = {
   mint: "text-village-mint",
   lilac: "text-village-lilac",
   rose: "text-village-rose",
+  amber: "text-amber-400",
 };
 
 export function Hotspot({

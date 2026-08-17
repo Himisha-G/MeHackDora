@@ -78,26 +78,24 @@ function VillageHome() {
           />
           <Fireflies />
 
-          <div className="absolute inset-0 z-10">
+          <div className="absolute inset-0 z-30">
             <Hotspot
               to="/guidebot"
               label="GuideBot"
-              caption="Guidance, grounding & gentle advice"
+              caption="A steady companion for the heavier days."
               icon={Bot}
               tone="mint"
               x={23}
               y={34}
-              delay={0}
             />
             <Hotspot
               to="/connect"
               label="Connect"
-              caption="Share your day with the village"
+              caption="The Lantern Pagoda. Where villagers gather and share."
               icon={Users}
-              tone="gold"
-              x={73.5}
-              y={23}
-              delay={400}
+              tone="amber"
+              x={72}
+              y={24}
             />
             <Hotspot
               to="/friendbot"
@@ -122,7 +120,7 @@ function VillageHome() {
           </div>
         </div>
 
-        <header className="village-rise absolute inset-x-0 top-0 z-20 flex flex-col items-center px-4 pt-7 text-center sm:pt-10">
+        <header className="village-rise absolute inset-x-0 top-0 z-20 pointer-events-none flex flex-col items-center px-4 pt-7 text-center sm:pt-10">
           <span className="mb-3 inline-flex items-center gap-2 rounded-full bg-village-cream/85 px-4 py-1.5 text-xs font-semibold tracking-wide text-village-ink uppercase">
             <Sparkle className="size-3.5" /> A gentle place to land
           </span>

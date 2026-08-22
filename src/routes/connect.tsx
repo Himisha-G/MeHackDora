@@ -1,6 +1,9 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useState, useEffect, useRef } from "react";
-import { Globe, Heart, Shield, MessageSquare, Sparkles, Send, Flame, Smile } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Send, Shield, ArrowLeft, LogOut, Wifi, WifiOff, DoorOpen } from "lucide-react";
+
+import knockImage from "../assets/knock.png";
+import connectImage from "../assets/connectImg.png";
 
 export const Route = createFileRoute("/connect")({
   head: () => ({
@@ -8,503 +11,475 @@ export const Route = createFileRoute("/connect")({
       { title: "Connect — Ananda" },
       {
         name: "description",
-        content: "The lantern-lit pagoda where villagers gather to talk, share small wins and cheer each other on.",
+        content:
+          "Knock on the door and find someone to talk to anonymously.",
       },
       { property: "og:title", content: "Connect — Ananda" },
-      { property: "og:description", content: "Gather in the pagoda and share your day with the village." },
+      {
+        property: "og:description",
+        content:
+          "Knock on the door and find someone to talk to anonymously.",
+      },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
   component: ConnectWorld,
 });
 
-type PostReaction = {
-  count: number;
-  active: boolean;
-  emoji: string;
-  label: string;
-};
+// -----------------------------------------------------------------------------
+// Types
+// -----------------------------------------------------------------------------
 
-type Post = {
+type ConnectionState = "connecting" | "waiting" | "matched" | "connected";
+
+type Message = {
   id: string;
-  author: string;
-  avatar: string;
-  mood: "😔 Heavy" | "😊 Light" | "😐 Okay";
-  timestamp: string;
   text: string;
-  reactions: {
-    strength: PostReaction;
-    alone: PostReaction;
-    sitting: PostReaction;
-  };
+  sender: "me" | "partner";
 };
 
-const INITIAL_POSTS: Post[] = [
-  {
-    id: "p1",
-    author: "Anonymous",
-    avatar: "🕯️",
-    mood: "😔 Heavy",
-    timestamp: "2 hours ago",
-    text: "Feeling really overwhelmed with college work today. Sometimes it feels like I'm running on empty and everyone else is moving so fast. Just taking it one breath at a time.",
-    reactions: {
-      strength: { count: 8, active: false, emoji: "💛", label: "Sending strength" },
-      alone: { count: 12, active: false, emoji: "🤍", label: "You are not alone" },
-      sitting: { count: 5, active: false, emoji: "🕯️", label: "Sitting with you" },
-    }
-  },
-  {
-    id: "p2",
-    author: "Anonymous",
-    avatar: "🌙",
-    mood: "😐 Okay",
-    timestamp: "4 hours ago",
-    text: "Spent some quiet time by the great waterfall today. It didn't solve my problems, but the sound of the water helped quiet the noise in my head for a bit. Nature really has a gentle way of grounding us.",
-    reactions: {
-      strength: { count: 4, active: false, emoji: "💛", label: "Sending strength" },
-      alone: { count: 7, active: false, emoji: "🤍", label: "You are not alone" },
-      sitting: { count: 3, active: false, emoji: "🕯️", label: "Sitting with you" },
-    }
-  },
-  {
-    id: "p3",
-    author: "Anonymous",
-    avatar: "✨",
-    mood: "😊 Light",
-    timestamp: "6 hours ago",
-    text: "Managed to finish a small project that has been hanging over me for weeks. Taking a moment to appreciate the relief and celebrate a small victory.",
-    reactions: {
-      strength: { count: 15, active: false, emoji: "💛", label: "Sending strength" },
-      alone: { count: 9, active: false, emoji: "🤍", label: "You are not alone" },
-      sitting: { count: 2, active: false, emoji: "🕯️", label: "Sitting with you" },
-    }
-  }
-];
+type ServerEvent = {
+  type: "connected" | "waiting" | "matched" | "message" | "partner_left" | "error";
+  message?: string;
+  client_id?: string;
+};
+
+const WS_URL = "wss://anonymouschat-885z.onrender.com/ws";
+const DOOR_OPEN_MS = 900;
+
+// -----------------------------------------------------------------------------
+// Main Component
+// -----------------------------------------------------------------------------
 
 function ConnectWorld() {
-  const [posts, setPosts] = useState<Post[]>(INITIAL_POSTS);
-  const [newPostText, setNewPostText] = useState("");
-  const [selectedMood, setSelectedMood] = useState<"😔 Heavy" | "😊 Light" | "😐 Okay">("😐 Okay");
-  const [isAnonymous, setIsAnonymous] = useState(true);
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>("connecting");
 
-  // Mouse moves tracker
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [messageText, setMessageText] = useState("");
+  const [connectionError, setConnectionError] = useState("");
+
+  const socketRef = useRef<WebSocket | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const cancelledRef = useRef(false);
+
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      setMousePos({ x: e.clientX, y: e.clientY });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // ---------------------------------------------------------------------------
+  // Connect to WebSocket
+  // ---------------------------------------------------------------------------
+  //
+  // FIX: every handler now checks `isCurrent()` — i.e. "is this socket still
+  // the one socketRef is pointing at, and have we not been cancelled" — before
+  // touching state or acting on a message. This makes the whole thing immune
+  // to StrictMode's double-mount (mount -> cleanup -> mount), which previously
+  // left a stale, still-connecting socket alive in the background because the
+  // old cleanup only closed sockets that were already OPEN.
+  // ---------------------------------------------------------------------------
+
+  const connectToServer = useCallback(() => {
+    if (cancelledRef.current) return;
+
+    console.log("Connecting to:", WS_URL);
+
+    setConnectionState("connecting");
+    setConnectionError("");
+
+    const socket = new WebSocket(WS_URL);
+    socketRef.current = socket;
+
+    const isCurrent = () => socketRef.current === socket && !cancelledRef.current;
+
+    socket.onopen = () => {
+      if (!isCurrent()) {
+        // A newer connection replaced this one (or we were cancelled)
+        // before the handshake finished. Don't let this stale socket
+        // linger on the backend.
+        socket.close(1000, "Stale connection");
+        return;
+      }
+      console.log("✅ WebSocket connected");
     };
-    window.addEventListener("mousemove", handleMouseMove);
-    return () => window.removeEventListener("mousemove", handleMouseMove);
+
+    socket.onmessage = (event) => {
+      if (!isCurrent()) return;
+
+      let data: ServerEvent;
+      try {
+        data = JSON.parse(String(event.data));
+      } catch {
+        console.warn("Received non-JSON message, ignoring:", event.data);
+        return;
+      }
+
+      console.log("📨 Server event:", data);
+
+      switch (data.type) {
+        case "connected":
+          break;
+
+        case "waiting":
+          setConnectionState("waiting");
+          break;
+
+        case "matched": {
+          setConnectionState("matched");
+          setConnectionError("");
+
+          setMessages([
+            {
+              id: crypto.randomUUID(),
+              text: "You are now connected. Say hello 👋",
+              sender: "partner",
+            },
+          ]);
+
+          setTimeout(() => {
+            if (isCurrent()) {
+              setConnectionState("connected");
+            }
+          }, DOOR_OPEN_MS);
+
+          break;
+        }
+
+        case "message":
+          setMessages((previous) => [
+            ...previous,
+            {
+              id: crypto.randomUUID(),
+              text: data.message ?? "",
+              sender: "partner",
+            },
+          ]);
+          break;
+
+        case "partner_left":
+          setConnectionState("waiting");
+          setMessages([]);
+          setConnectionError(data.message ?? "Your partner left the chat.");
+          break;
+
+        case "error":
+          setConnectionError(data.message ?? "Something went wrong.");
+          break;
+
+        default:
+          console.warn("Unknown event type from server:", data);
+      }
+    };
+
+    socket.onclose = (event) => {
+      console.log("🔌 WebSocket closed:", event.code, event.reason);
+
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+      }
+
+      if (cancelledRef.current) return;
+      if (socketRef.current !== null) return; // a newer socket already took over
+
+      setConnectionState("waiting");
+      setMessages([]);
+
+      if (event.code !== 1000) {
+        setConnectionError(
+          "The connection was interrupted. Trying to reconnect..."
+        );
+
+        setTimeout(() => {
+          if (!cancelledRef.current) {
+            connectToServer();
+          }
+        }, 2000);
+      }
+    };
+
+    socket.onerror = (error) => {
+      if (!isCurrent()) return;
+      console.error("❌ WebSocket error:", error);
+      setConnectionError("Unable to connect to the chat server.");
+    };
   }, []);
 
-  // HTML5 Starfield Canvas
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let animationFrameId: number;
-    let width = (canvas.width = window.innerWidth);
-    let height = (canvas.height = window.innerHeight);
-
-    class Particle {
-      x: number;
-      y: number;
-      vx: number;
-      vy: number;
-      baseVx: number;
-      baseVy: number;
-      size: number;
-      color: string;
-      alpha: number;
-
-      constructor() {
-        this.x = Math.random() * width;
-        this.y = Math.random() * height;
-        this.size = 1.0 + Math.random() * 2.0;
-        this.alpha = 0.25 + Math.random() * 0.5;
-        this.vx = (Math.random() - 0.5) * 0.25;
-        this.vy = (Math.random() - 0.5) * 0.25;
-        this.baseVx = this.vx;
-        this.baseVy = this.vy;
-
-        const hue = Math.random() > 0.5 
-          ? 35 + Math.floor(Math.random() * 15) // Warm amber stars
-          : 280 + Math.floor(Math.random() * 40); // Purple/indigo accents
-        this.color = `hsla(${hue}, 85%, 65%, `;
-      }
-
-      update(mx: number, my: number, reduced: boolean) {
-        if (!reduced) {
-          this.x += this.vx;
-          this.y += this.vy;
-
-          const dx = this.x - mx;
-          const dy = this.y - my;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          const maxRepelDist = 100;
-
-          if (dist < maxRepelDist && dist > 1) {
-            const force = (maxRepelDist - dist) / maxRepelDist;
-            this.x += (dx / dist) * force * 1.8;
-            this.y += (dy / dist) * force * 1.8;
-            this.vx = this.baseVx + (dx / dist) * force * 0.4;
-            this.vy = this.baseVy + (dy / dist) * force * 0.4;
-          } else {
-            this.vx += (this.baseVx - this.vx) * 0.05;
-            this.vy += (this.baseVy - this.vy) * 0.05;
-          }
-
-          if (this.x < 0) this.x = width;
-          if (this.x > width) this.x = 0;
-          if (this.y < 0) this.y = height;
-          if (this.y > height) this.y = 0;
-        }
-      }
-
-      draw(c: CanvasRenderingContext2D) {
-        c.beginPath();
-        c.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-        c.fillStyle = `${this.color}${this.alpha})`;
-        c.shadowBlur = 4;
-        c.shadowColor = "white";
-        c.fill();
-        c.shadowBlur = 0;
-      }
-    }
-
-    const particles: Particle[] = Array.from({ length: 110 }, () => new Particle());
-
-    const handleResize = () => {
-      if (!canvas) return;
-      width = canvas.width = window.innerWidth;
-      height = canvas.height = window.innerHeight;
-    };
-    window.addEventListener("resize", handleResize);
-
-    const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    let currentMx = -1000;
-    let currentMy = -1000;
-    const onMouseMoveCanvas = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      currentMx = e.clientX - rect.left;
-      currentMy = e.clientY - rect.top;
-    };
-    window.addEventListener("mousemove", onMouseMoveCanvas);
-
-    const loop = () => {
-      ctx.clearRect(0, 0, width, height);
-      particles.forEach((p) => {
-        p.update(currentMx, currentMy, prefersReducedMotion);
-        p.draw(ctx);
-      });
-      animationFrameId = requestAnimationFrame(loop);
-    };
-    loop();
+    cancelledRef.current = false;
+    connectToServer();
 
     return () => {
-      cancelAnimationFrame(animationFrameId);
-      window.removeEventListener("resize", handleResize);
-      window.removeEventListener("mousemove", onMouseMoveCanvas);
-    };
-  }, []);
+      cancelledRef.current = true;
 
-  const handlePostSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPostText.trim()) return;
+      // FIX: close unconditionally (any state except already-closed/closing),
+      // not just when OPEN — this is what actually prevents the StrictMode
+      // orphan-socket bug.
+      const socket = socketRef.current;
+      socketRef.current = null;
 
-    const newPost: Post = {
-      id: crypto.randomUUID(),
-      author: isAnonymous ? "Anonymous" : "Villager",
-      avatar: selectedMood === "😔 Heavy" ? "🕯️" : selectedMood === "😊 Light" ? "✨" : "🌙",
-      mood: selectedMood,
-      timestamp: "Just now",
-      text: newPostText.trim(),
-      reactions: {
-        strength: { count: 0, active: false, emoji: "💛", label: "Sending strength" },
-        alone: { count: 0, active: false, emoji: "🤍", label: "You are not alone" },
-        sitting: { count: 0, active: false, emoji: "🕯️", label: "Sitting with you" },
+      if (
+        socket &&
+        socket.readyState !== WebSocket.CLOSED &&
+        socket.readyState !== WebSocket.CLOSING
+      ) {
+        socket.close(1000, "Leaving Connect page");
       }
     };
+  }, [connectToServer]);
 
-    setPosts((prev) => [newPost, ...prev]);
-    setNewPostText("");
+  // ---------------------------------------------------------------------------
+  // Send Message
+  // ---------------------------------------------------------------------------
+
+  const sendMessage = () => {
+    const text = messageText.trim();
+    if (!text) return;
+
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (connectionState !== "connected") return;
+
+    socket.send(JSON.stringify({ type: "message", message: text }));
+
+    setMessages((previous) => [
+      ...previous,
+      { id: crypto.randomUUID(), text, sender: "me" },
+    ]);
+
+    setMessageText("");
   };
 
-  const handleReactionClick = (postId: string, reactionType: "strength" | "alone" | "sitting") => {
-    setPosts((prev) =>
-      prev.map((post) => {
-        if (post.id !== postId) return post;
-        const currentReaction = post.reactions[reactionType];
-        const newActiveState = !currentReaction.active;
-        return {
-          ...post,
-          reactions: {
-            ...post.reactions,
-            [reactionType]: {
-              ...currentReaction,
-              active: newActiveState,
-              count: newActiveState ? currentReaction.count + 1 : currentReaction.count - 1,
-            }
-          }
-        };
-      })
-    );
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
+    }
   };
+
+  // ---------------------------------------------------------------------------
+  // Leave Chat
+  // ---------------------------------------------------------------------------
+
+  const leaveChat = () => {
+    const socket = socketRef.current;
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      connectToServer();
+      return;
+    }
+
+    socket.send(JSON.stringify({ type: "leave" }));
+
+    setMessages([]);
+    setMessageText("");
+    setConnectionError("");
+    setConnectionState("waiting");
+  };
+
+  // ---------------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------------
+
+  const showChatRoom = connectionState === "connected";
+  const showDoorOpening = connectionState === "matched";
+  const backgroundImage =
+    connectionState === "connected" || connectionState === "matched"
+      ? connectImage
+      : knockImage;
 
   return (
-    <main className="min-h-screen w-full bg-slate-950 overflow-x-hidden relative text-white flex flex-col items-center p-4 pb-16 sm:p-6 sm:pb-24">
-      {/* Background Starfield */}
-      <canvas ref={canvasRef} className="absolute inset-0 size-full pointer-events-none z-0" />
+    <main className="relative min-h-screen w-full overflow-hidden bg-[#24170f] text-white">
+      <img
+        src={backgroundImage}
+        alt=""
+        className="absolute inset-0 h-full w-full object-cover"
+      />
 
-      {/* Silhouette pines and cottage layout */}
-      <div className="absolute bottom-0 inset-x-0 h-40 pointer-events-none z-10 text-slate-950 fill-current select-none opacity-85" aria-hidden>
-        <svg className="w-full h-full object-cover" viewBox="0 0 1440 200" preserveAspectRatio="none">
-          <path d="M 0 200 L 0 170 L 40 140 L 45 145 L 80 110 L 85 115 L 120 70 L 130 90 L 160 120 L 200 150 L 250 175 L 300 160 L 320 140 L 330 145 L 370 100 L 390 125 L 430 155 L 500 170 L 520 160 L 530 165 L 560 130 L 600 165 L 650 175 L 700 140 L 720 110 L 730 115 L 760 80 L 780 110 L 820 150 L 880 175 L 940 160 L 980 120 L 1020 80 L 1040 105 L 1080 145 L 1150 170 L 1220 160 L 1240 140 L 1250 145 L 1280 110 L 1320 145 L 1380 170 L 1440 150 L 1440 200 Z" />
-          <path d="M 620 175 L 650 140 L 680 175 Z" />
-        </svg>
-        <div className="absolute left-[45.2%] bottom-[12px] w-2.5 h-2.5 rounded-full bg-amber-400 blur-[1px] shadow-[0_0_12px_4px_rgba(251,191,36,0.65)] animate-pulse" />
+      {/* Only dim the scene before/during matching — once connected, let the
+          background art breathe. The chat card below carries its own contrast. */}
+      {!showChatRoom && (
+        <div
+          className={`absolute inset-0 transition-all duration-1000 ${
+            showDoorOpening ? "bg-black/20" : "bg-black/10"
+          }`}
+        />
+      )}
+
+      <div className="absolute left-0 right-0 top-0 z-30 flex items-center justify-between p-4 sm:p-6">
+        <Link
+          to="/"
+          className="flex items-center gap-2 rounded-full border border-white/20 bg-black/25 px-4 py-2 text-sm font-semibold text-white backdrop-blur-md transition-all hover:bg-black/40 active:scale-95"
+        >
+          <ArrowLeft className="size-4" />
+          Back to village
+        </Link>
+
+        <div className="flex items-center gap-2 rounded-full border border-white/20 bg-black/25 px-3 py-2 text-xs font-semibold backdrop-blur-md">
+          {connectionState === "connected" ? (
+            <>
+              <Wifi className="size-3.5 text-emerald-300" />
+              <span className="text-emerald-100">Connected</span>
+            </>
+          ) : connectionState === "matched" ? (
+            <>
+              <DoorOpen className="size-3.5 text-emerald-300" />
+              <span className="text-emerald-100">Opening the door</span>
+            </>
+          ) : connectionState === "waiting" ? (
+            <>
+              <Wifi className="size-3.5 text-amber-300" />
+              <span className="text-amber-100">Waiting</span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="size-3.5 text-white/70" />
+              <span className="text-white/80">Connecting</span>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Back Button */}
-      <Link
-        to="/"
-        className="absolute top-4 left-4 z-20 flex items-center gap-1.5 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300 transition-all shadow-[4px_4px_10px_rgba(0,0,0,0.4),-4px_-4px_10px_rgba(255,255,255,0.02)] active:scale-95 cursor-pointer backdrop-blur-md"
-      >
-        ← Back to village
-      </Link>
-
-      {/* Header Container */}
-      <header className="relative z-10 text-center select-none mt-12 mb-8 max-w-xl">
-        <span className="text-[10px] font-bold tracking-[0.25em] text-amber-500 uppercase block mb-1">
-          THE LANTERN PAGODA
-        </span>
-        <h1 className="font-display text-4xl font-extrabold text-white">Connect</h1>
-        <p className="text-xs sm:text-sm text-slate-400 mt-2">
-          Share your day and remember nobody here is doing this alone.
-        </p>
-      </header>
-
-      {/* Main Grid Content */}
-      <div className="relative z-10 w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        
-        {/* Left Side: Composer and Feed */}
-        <div className="lg:col-span-8 flex flex-col gap-6">
-          
-          {/* Post Composer Card */}
-          <section className="relative overflow-hidden rounded-3xl border border-white/20 bg-white/5 backdrop-blur-md p-6 z-10">
-            <form onSubmit={handlePostSubmit} className="flex flex-col gap-4">
-              <div className="w-full">
-                <textarea
-                  value={newPostText}
-                  onChange={(e) => setNewPostText(e.target.value)}
-                  placeholder="How was your day?"
-                  className="bg-white/5 border border-white/10 rounded-xl focus:ring-1 focus:ring-amber-500/30 focus:border-amber-500/20 outline-none text-white text-sm p-4 w-full h-24 placeholder-slate-400 transition-all resize-none shadow-[inset_2px_2px_5px_rgba(0,0,0,0.5),inset_-2px_-2px_5px_rgba(255,255,255,0.02)]"
-                />
-              </div>
-
-              {/* Controls Section */}
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                
-                {/* Mood Chips Selection */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400 font-semibold select-none">Mood:</span>
-                  {(["😔 Heavy", "😐 Okay", "😊 Light"] as const).map((mood) => {
-                    const isActive = selectedMood === mood;
-                    return (
-                      <button
-                        key={mood}
-                        type="button"
-                        onClick={() => setSelectedMood(mood)}
-                        className={`text-xs font-semibold px-3.5 py-1.5 rounded-full transition-all border cursor-pointer active:scale-95 flex items-center gap-1 ${
-                          isActive
-                            ? "bg-amber-500/20 border-amber-400/40 text-amber-200 shadow-[inset_2px_2px_5px_rgba(0,0,0,0.4)]"
-                            : "bg-white/5 border-white/5 text-slate-300 hover:bg-white/10 hover:border-white/10 shadow-[2px_2px_6px_rgba(0,0,0,0.35)]"
-                        }`}
-                      >
-                        {mood}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Anonymous Toggle and Submit button */}
-                <div className="flex items-center gap-4">
-                  {/* Share Anonymously Toggle */}
-                  <label className="flex items-center gap-2 cursor-pointer select-none">
-                    <span className="text-xs text-slate-300 font-semibold flex items-center gap-1">
-                      <Shield className="size-3.5 text-slate-400" />
-                      Anonymous
-                    </span>
-                    <div className="relative">
-                      <input
-                        type="checkbox"
-                        checked={isAnonymous}
-                        onChange={(e) => setIsAnonymous(e.target.checked)}
-                        className="sr-only"
-                      />
-                      <div className={`w-8 h-4.5 rounded-full transition-colors duration-300 shadow-[inset_1px_1px_3px_rgba(0,0,0,0.6)] ${
-                        isAnonymous ? "bg-amber-600" : "bg-slate-800"
-                      }`} />
-                      <div className={`absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform duration-300 shadow-md ${
-                        isAnonymous ? "translate-x-3.5" : "translate-x-0"
-                      }`} />
-                    </div>
-                  </label>
-
-                  {/* Send Button */}
-                  <button
-                    type="submit"
-                    disabled={!newPostText.trim()}
-                    className="bg-amber-600/80 hover:bg-amber-500 text-white font-semibold text-xs px-5 py-2 rounded-full transition-all shadow-[4px_4px_10px_rgba(0,0,0,0.4),-4px_-4px_10px_rgba(255,255,255,0.02)] active:scale-95 active:shadow-[inset_2px_2px_5px_rgba(0,0,0,0.6)] disabled:opacity-55 disabled:cursor-not-allowed disabled:scale-100 flex items-center gap-1 shrink-0"
-                  >
-                    Share
-                    <Send className="size-3" />
-                  </button>
-                </div>
-
-              </div>
-            </form>
-          </section>
-
-          {/* Feed Post List */}
-          <div className="flex flex-col gap-4">
-            {posts.map((post) => (
-              <article
-                key={post.id}
-                className="relative overflow-hidden rounded-3xl border border-white/10 bg-slate-900/60 p-5 shadow-[0_0_20px_2px_rgba(245,158,11,0.08),12px_12px_24px_rgba(0,0,0,0.6),inset_1px_1px_0px_rgba(255,255,255,0.05)] flex flex-col gap-4"
-              >
-                {/* Post Header */}
-                <div className="flex justify-between items-center select-none">
-                  <div className="flex items-center gap-2">
-                    <span className="text-lg bg-white/5 border border-white/10 rounded-full w-8 h-8 flex items-center justify-center shadow-[inset_1px_1px_0px_rgba(255,255,255,0.05)]">
-                      {post.avatar}
-                    </span>
-                    <div>
-                      <span className="text-xs font-bold text-white block leading-none">
-                        {post.author}
-                      </span>
-                      <span className="text-[10px] text-slate-400 mt-1 font-semibold inline-block bg-white/5 px-2 py-0.5 rounded-full border border-white/5 shadow-[inset_1px_1px_0px_rgba(255,255,255,0.02)]">
-                        {post.mood}
-                      </span>
+      {!showChatRoom && (
+        <section className="relative z-20 flex min-h-screen items-end justify-center px-4 pb-10 pt-24 sm:pb-14">
+          <div className="w-full max-w-md text-center">
+            <div className="rounded-3xl border border-white/20 bg-black/20 p-5 shadow-2xl backdrop-blur-md sm:p-6">
+              {connectionState === "connecting" ? (
+                <>
+                  <div className="mx-auto mb-3 flex size-12 items-center justify-center rounded-full border border-white/20 bg-black/20">
+                    <div className="size-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  </div>
+                  <h1 className="text-xl font-bold text-white">
+                    Finding the door...
+                  </h1>
+                  <p className="mt-2 text-sm text-white/75">
+                    Connecting you to the village.
+                  </p>
+                </>
+              ) : connectionState === "matched" ? (
+                <>
+                  <div className="mx-auto mb-3 flex size-14 items-center justify-center rounded-full border border-emerald-200/30 bg-emerald-100/10">
+                    <DoorOpen className="size-6 animate-pulse text-emerald-200" />
+                  </div>
+                  <h1 className="text-2xl font-bold text-white sm:text-3xl">
+                    The door opens...
+                  </h1>
+                  <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-white/75">
+                    Someone's here. Stepping inside.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div className="mx-auto mb-3 flex items-center justify-center">
+                    <div className="animate-pulse rounded-full border border-amber-200/30 bg-amber-100/10 px-5 py-2 text-sm font-semibold text-amber-50 backdrop-blur-sm">
+                      Knock... Knock...
                     </div>
                   </div>
-                  <span className="text-[10px] text-slate-500 font-bold">
-                    {post.timestamp}
-                  </span>
-                </div>
+                  <h1 className="text-2xl font-bold text-white sm:text-3xl">
+                    Waiting for someone
+                  </h1>
+                  <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-white/75">
+                    Someone else is looking for a quiet conversation too.
+                    Stay here and we'll open the door when they arrive.
+                  </p>
 
-                {/* Post Text */}
-                <p className="text-slate-200 text-sm leading-relaxed whitespace-pre-wrap pl-1">
-                  {post.text}
-                </p>
+                  {connectionError && (
+                    <p className="mt-3 text-xs text-red-200">
+                      {connectionError}
+                    </p>
+                  )}
+                </>
+              )}
 
-                {/* Safe Reaction buttons row */}
-                <div className="flex flex-wrap gap-2 pt-2 border-t border-white/5">
-                  {(Object.keys(post.reactions) as Array<keyof typeof post.reactions>).map((type) => {
-                    const reaction = post.reactions[type];
-                    return (
-                      <button
-                        key={type}
-                        type="button"
-                        onClick={() => handleReactionClick(post.id, type)}
-                        className={`text-xs font-semibold px-3 py-1.5 rounded-full transition-all border cursor-pointer active:scale-95 flex items-center gap-1.5 ${
-                          reaction.active
-                            ? "bg-amber-500/20 border-amber-400/40 text-amber-200 shadow-[inset_2px_2px_4px_rgba(0,0,0,0.4)]"
-                            : "bg-white/5 border-white/5 text-slate-400 hover:bg-white/10 hover:border-white/10 hover:text-slate-300 shadow-[2px_2px_6px_rgba(0,0,0,0.35)]"
-                        }`}
-                      >
-                        <span>{reaction.label}</span>
-                        <span>{reaction.emoji}</span>
-                        <span className={`text-[10px] font-bold ${reaction.active ? "text-amber-300" : "text-slate-500"}`}>
-                          {reaction.count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </article>
-            ))}
+              <div className="mt-4 flex items-center justify-center gap-2 text-[11px] text-white/60">
+                <Shield className="size-3.5" />
+                Anonymous conversation
+              </div>
+            </div>
           </div>
+        </section>
+      )}
 
-        </div>
+      {/* -------------------------------------------------------------- */}
+      {/* CHAT ROOM — now a compact floating card, not a full-bleed panel */}
+      {/* so the background art stays the star of the screen.            */}
+      {/* -------------------------------------------------------------- */}
 
-        {/* Right Side: Sidebar Widget "Found Company" */}
-        <aside className="lg:col-span-4 flex flex-col gap-6">
-          
-          {/* Found Company Widget Card */}
-          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-slate-900/40 backdrop-blur-2xl p-5 shadow-[12px_12px_24px_rgba(0,0,0,0.6),-6px_-6px_20px_rgba(255,255,255,0.02),inset_1px_1px_0px_rgba(255,255,255,0.05)] flex flex-col gap-4 select-none">
-            <header className="flex items-center gap-1.5 border-b border-white/5 pb-2.5">
-              <Sparkles className="size-4 text-amber-400" />
-              <h3 className="text-xs font-bold text-amber-400/90 tracking-wider uppercase">
-                Found Company
-              </h3>
+      {showChatRoom && (
+        <section className="absolute inset-0 z-20 flex items-end justify-center p-4 sm:items-center sm:justify-end sm:p-8">
+          <div className="flex h-[75vh] max-h-[560px] w-full max-w-sm flex-col overflow-hidden rounded-3xl border border-white/15 bg-[#2b1b13]/85 shadow-2xl backdrop-blur-lg">
+            <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-black/10 px-4 py-3 sm:px-5">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-amber-300">
+                  A quiet room
+                </p>
+                <h1 className="mt-1 text-base font-bold text-white">
+                  You found someone
+                </h1>
+              </div>
+
+              <button
+                type="button"
+                onClick={leaveChat}
+                className="flex items-center gap-1.5 rounded-full border border-red-200/20 bg-red-950/20 px-3 py-1.5 text-xs font-semibold text-red-100 transition-all hover:bg-red-900/30 active:scale-95"
+              >
+                <LogOut className="size-3.5" />
+                Leave
+              </button>
             </header>
 
-            <div className="flex flex-col gap-4">
-              
-              {/* Row 1: Heavy mood company */}
-              <div className="flex items-center gap-3 bg-white/5 border border-white/5 rounded-2xl p-3 shadow-[inset_1px_1px_0px_rgba(255,255,255,0.02),3px_3px_8px_rgba(0,0,0,0.4)]">
-                {/* Overlapping glowing avatar layout */}
-                <div className="flex shrink-0">
-                  <span className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-xs flex items-center justify-center shadow-[0_0_10px_2px_rgba(16,185,129,0.3)] select-none">
-                    🕯️
-                  </span>
-                  <span className="w-7 h-7 rounded-full bg-amber-500/20 border border-amber-400/40 text-xs flex items-center justify-center -ml-3.5 shadow-[0_0_10px_2px_rgba(245,158,11,0.3)] select-none">
-                    🕯️
-                  </span>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-slate-200">
-                    2 others feel heavy right now.
-                  </p>
-                  <p className="text-[10px] text-slate-500 font-semibold mt-0.5 leading-none">
-                    Sitting quietly in the pagoda.
-                  </p>
-                </div>
+            <div className="flex-1 overflow-y-auto px-3 py-4 sm:px-4">
+              <div className="flex flex-col gap-2.5">
+                {messages.map((message) => {
+                  const isMine = message.sender === "me";
+                  return (
+                    <div
+                      key={message.id}
+                      className={`flex ${isMine ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed shadow-lg ${
+                          isMine
+                            ? "rounded-br-md bg-amber-600/90 text-white"
+                            : "rounded-bl-md border border-white/10 bg-white/10 text-white/90"
+                        }`}
+                      >
+                        {message.text}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={messagesEndRef} />
               </div>
-
-              {/* Row 2: Okay/Light mood company */}
-              <div className="flex items-center gap-3 bg-white/5 border border-white/5 rounded-2xl p-3 shadow-[inset_1px_1px_0px_rgba(255,255,255,0.02),3px_3px_8px_rgba(0,0,0,0.4)]">
-                <div className="flex shrink-0">
-                  <span className="w-7 h-7 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-xs flex items-center justify-center shadow-[0_0_10px_2px_rgba(99,102,241,0.3)] select-none">
-                    🌙
-                  </span>
-                  <span className="w-7 h-7 rounded-full bg-teal-500/20 border border-teal-400/40 text-xs flex items-center justify-center -ml-3.5 shadow-[0_0_10px_2px_rgba(20,184,166,0.3)] select-none">
-                    ✨
-                  </span>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-slate-200">
-                    5 others feel okay right now.
-                  </p>
-                  <p className="text-[10px] text-slate-500 font-semibold mt-0.5 leading-none">
-                    Breathing, resting.
-                  </p>
-                </div>
-              </div>
-
             </div>
-          </section>
 
-          {/* Quick Safety Guideline Card */}
-          <section className="relative overflow-hidden rounded-3xl border border-white/10 bg-slate-900/40 backdrop-blur-2xl p-5 shadow-[12px_12px_24px_rgba(0,0,0,0.6),-6px_-6px_20px_rgba(255,255,255,0.02),inset_1px_1px_0px_rgba(255,255,255,0.05)] flex flex-col gap-2.5 select-none text-xs text-slate-400 leading-relaxed">
-            <h4 className="font-bold text-slate-300 flex items-center gap-1.5 leading-none border-b border-white/5 pb-2">
-              <Shield className="size-4 text-emerald-400" />
-              Lantern Pagoda Rules
-            </h4>
-            <p>• Everything is anonymous by default. Your safety and peace are protected.</p>
-            <p>• No comments or text replies are allowed here to prevent judgment or unsolicited advice.</p>
-            <p>• Offer quiet support solely through safe, pre-selected reactions.</p>
-          </section>
-
-        </aside>
-
-      </div>
+            <div className="shrink-0 border-t border-white/10 bg-black/10 p-2.5 sm:p-3">
+              <div className="flex items-end gap-2 rounded-2xl border border-white/10 bg-white/5 p-1.5">
+                <textarea
+                  value={messageText}
+                  onChange={(event) => setMessageText(event.target.value)}
+                  onKeyDown={handleKeyDown}
+                  rows={1}
+                  placeholder="Write something..."
+                  className="max-h-28 min-h-9 flex-1 resize-none bg-transparent px-2.5 py-1.5 text-sm text-white outline-none placeholder:text-white/40"
+                />
+                <button
+                  type="button"
+                  onClick={sendMessage}
+                  disabled={!messageText.trim()}
+                  className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-600 text-white transition-all hover:bg-amber-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label="Send message"
+                >
+                  <Send className="size-4" />
+                </button>
+              </div>
+              <div className="mt-1.5 flex items-center justify-center gap-1.5 text-[10px] text-white/40">
+                <Shield className="size-3" />
+                Your identity stays anonymous
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
     </main>
   );
 }

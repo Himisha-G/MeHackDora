@@ -44,7 +44,7 @@ type ServerEvent = {
   client_id?: string;
 };
 
-const WS_URL = "wss://anonymouschat-885z.onrender.com/ws";
+const WS_URL = import.meta.env.VITE_WS_URL;
 const DOOR_OPEN_MS = 900;
 
 // -----------------------------------------------------------------------------
